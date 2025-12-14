@@ -1,0 +1,44 @@
+# Local environments
+.venv/
+.cache/
+__pycache__/
+*.pyc
+
+# Local clones
+realme_C25Y-AndroidR-kernel-source/
+kernel/
+kernelsu/
+
+# Local scratch (CI reproduction / experiments)
+_ci_repro*/
+
+# Accidental local files
+mailmap.txt
+
+# Kernel build output
+out_*/
+out-*/
+out_rmx*/
+*.o
+*.a
+*.so
+*.ko
+*.mod
+*.cmd
+*.d
+*.tmp
+
+# Boot image artifacts (never publish stock boot.img)
+boot*.img
+boot_*/
+boottools/
+
+# Logs / pids
+*.log
+*.pid
+
+# Editor/OS
+.vscode/
+*.swp
+*.swo
+*~

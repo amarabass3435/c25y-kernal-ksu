@@ -1,0 +1,107 @@
+name: Build RMX3265 kernel + KernelSU (non-GKI)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates \
+            flex gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi git \
+            libelf-dev libssl-dev libyaml-dev \
+            python3 rsync \
+            dwarves
+
+      - name: Clone upstream repos
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/realme-kernel-opensource/realme_C25Y-AndroidR-kernel-source.git kernel
+          git clone --depth 1 --branch v0.9.5 https://github.com/tiann/KernelSU.git kernelsu
+
+      - name: Apply KernelSU integration
+        run: |
+          set -euo pipefail
+          python3 ./apply_kernelsu.py --kernel ./kernel --kernelsu ./kernelsu
+
+      - name: Build Image.gz (capture log)
+        id: build
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        run: |
+          set -uo pipefail
+          rm -rf out_ksu
+          : > build.log
+
+          echo "== defconfig ==" | tee -a build.log
+          make O=out_ksu RMX3265_defconfig 2>&1 | tee -a build.log
+          defcfg_rc=${PIPESTATUS[0]}
+
+          if [ "$defcfg_rc" -eq 0 ]; then
+            echo "== build Image + dtbs ==" | tee -a build.log
+            # Vendor 4.14 trees often enable Werror and will fail on newer GCC warnings.
+            make -j"$(nproc)" O=out_ksu KCFLAGS="-Wno-error" Image dtbs 2>&1 | tee -a build.log
+            build_rc=${PIPESTATUS[0]}
+
+            if [ "$build_rc" -eq 0 ]; then
+              echo "== build Image.gz ==" | tee -a build.log
+              make -j"$(nproc)" O=out_ksu KCFLAGS="-Wno-error" Image.gz 2>&1 | tee -a build.log
+              build_rc=${PIPESTATUS[0]}
+            fi
+          else
+            build_rc=$defcfg_rc
+          fi
+
+          echo "rc=$build_rc" >> "$GITHUB_OUTPUT"
+          echo "== tail (last 200 lines) ==" | tee -a build.log
+          tail -n 200 build.log || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RMX3265-build-log
+          path: |
+            kernel/build.log
+          if-no-files-found: error
+
+      - name: Upload build outputs
+        if: steps.build.outputs.rc == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RMX3265-KernelSU-build
+          path: |
+            kernel/out_ksu/.config
+            kernel/out_ksu/arch/arm64/boot/Image.gz
+            kernel/out_ksu/arch/arm64/boot/Image
+            kernel/out_ksu/System.map
+            kernel/out_ksu/vmlinux
+          if-no-files-found: error
+
+      - name: Upload kernel Image only
+        if: steps.build.outputs.rc == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RMX3265-Image
+          path: |
+            kernel/out_ksu/arch/arm64/boot/Image
+            kernel/out_ksu/arch/arm64/boot/Image.gz
+          if-no-files-found: error
+
+      - name: Fail job if build failed
+        if: steps.build.outputs.rc != '0'
+        run: |
+          echo "Kernel build failed with rc=${{ steps.build.outputs.rc }}"
+          exit 1

@@ -1,0 +1,209 @@
+diff --git a/arch/arm64/boot/dts/sprd/ums512-w27v1.dts b/arch/arm64/boot/dts/sprd/ums512-w27v1.dts
+index 8e5f7d0dc..c1c5345e9 100644
+--- a/arch/arm64/boot/dts/sprd/ums512-w27v1.dts
++++ b/arch/arm64/boot/dts/sprd/ums512-w27v1.dts
+@@ -1041,8 +1041,10 @@
+ 	};
+ };
+ 
++/*
+ &modem_dbg_log {
+ 	vddio-supply = <&vddcamio>;
+ 	mipi-switch-en-gpios = <&ap_gpio 55 GPIO_ACTIVE_HIGH>;
+ 	mipi-switch-mode-gpios = <&ap_gpio 8 GPIO_ACTIVE_HIGH>;
+ };
++*/
+diff --git a/drivers/input/touchscreen/ili9882n/Makefile b/drivers/input/touchscreen/ili9882n/Makefile
+index 0cbee1f12..17fa30740 100755
+--- a/drivers/input/touchscreen/ili9882n/Makefile
++++ b/drivers/input/touchscreen/ili9882n/Makefile
+@@ -16,8 +16,8 @@ endif
+ 
+ ifeq ($(BUILD_PLATFORM),qcom)
+ platform=ilitek_v3_qcom
+-ccflags-y += -I$(srctree)/drivers/input/touchscreen/ILITEK_V3/
+-ccflags-y += -I$(srctree)/drivers/input/touchscreen/ILITEK_V3/firmware/
++ccflags-y += -I$(srctree)/drivers/input/touchscreen/ili9882n/
++ccflags-y += -I$(srctree)/drivers/input/touchscreen/ili9882n/firmware/
+ endif
+ 
+ ifeq ($(BUILD_INFAE),i2c)
+diff --git a/drivers/input/touchscreen/ili9882n/ilitek_oplus_node.c b/drivers/input/touchscreen/ili9882n/ilitek_oplus_node.c
+index b9a66cfb1..f2d890fa3 100755
+--- a/drivers/input/touchscreen/ili9882n/ilitek_oplus_node.c
++++ b/drivers/input/touchscreen/ili9882n/ilitek_oplus_node.c
+@@ -375,37 +375,45 @@ static ssize_t oplus_proc_register_read(struct file *filp, char __user *buff, si
+ 	mutex_unlock(&ilits->touch_mutex);
+ 	return len;
+ }
+-static ssize_t oplus_proc_register_write(struct file *filp, const char *buffer, size_t size, loff_t *pPos)
++static ssize_t oplus_proc_register_write(struct file *filp, const char __user *buffer, size_t size, loff_t *pPos)
+ {
+-		char *token = NULL, *cur = NULL;
+-		char cmd[256] = { 0 };
+-		u32 count = 0;
+-	
+-		if ((size - 1) > sizeof(cmd)) {
+-			ILI_ERR("ERROR! input length is larger than local buffer\n");
+-			return -1;
+-		}
+-	
+-		mutex_lock(&ilits->touch_mutex);
+-	
+-		if (buffer != NULL) {
+-			if (copy_from_user(cmd, buffer, size)) {
+-				ILI_INFO("Failed to copy data from user space\n");
+-				size = -1;
+-				goto out;
+-			}
+-		}
+-		token = cur = cmd;
+-		while ((token = strsep(&cur, ",")) != NULL) {
+-			oplus_rw_reg[count] = ili_str2hex(token);
+-			ILI_INFO("oplus_rw_reg[%d] = 0x%x\n", count, oplus_rw_reg[count]);
+-			count++;
++	char *token = NULL, *cur = NULL;
++	char cmd[256] = { 0 };
++	ssize_t ret = size;
++	u32 count = 0;
++
++	if (size == 0)
++		return 0;
++
++	if (size > (sizeof(cmd) - 1)) {
++		ILI_ERR("ERROR! input length is larger than local buffer\n");
++		return -EINVAL;
++	}
++
++	mutex_lock(&ilits->touch_mutex);
++
++	if (copy_from_user(cmd, buffer, size)) {
++		ILI_INFO("Failed to copy data from user space\n");
++		ret = -EFAULT;
++		goto out;
++	}
++	cmd[size] = '\0';
++
++	token = cur = cmd;
++	while ((token = strsep(&cur, ",")) != NULL) {
++		if (count >= (sizeof(oplus_rw_reg) / sizeof(oplus_rw_reg[0]))) {
++			ILI_ERR("ERROR! too many parameters (%u)\n", count);
++			ret = -EINVAL;
++			goto out;
+ 		}
+-	
+-	out:
+-		mutex_unlock(&ilits->touch_mutex);
+-		return size;
++		oplus_rw_reg[count] = ili_str2hex(token);
++		ILI_INFO("oplus_rw_reg[%d] = 0x%x\n", count, oplus_rw_reg[count]);
++		count++;
++	}
+ 
++out:
++	mutex_unlock(&ilits->touch_mutex);
++	return ret;
+ }
+ 
+ static ssize_t ilitek_direction_read(struct file *filp, char __user *buff, size_t size, loff_t *pPos)
+diff --git a/drivers/input/touchscreen/ili9882n/ilitek_v3_mp.c b/drivers/input/touchscreen/ili9882n/ilitek_v3_mp.c
+index e9f645298..f60d83a74 100755
+--- a/drivers/input/touchscreen/ili9882n/ilitek_v3_mp.c
++++ b/drivers/input/touchscreen/ili9882n/ilitek_v3_mp.c
+@@ -3679,7 +3679,7 @@ static int mp_sort_item(bool lcm_on)
+ 	char str[128] = {0};
+ 
+ 	ri.count = 0;
+-	memset(ri.index, 0x0, MP_TEST_ITEM);
++	memset(ri.index, 0x0, sizeof(ri.index));
+ 
+ 	for (i = 0; i < MAX_SECTION_NUM; i++) {
+ 		for (j = 0; j < MP_TEST_ITEM; j++) {
+@@ -3691,7 +3691,7 @@ static int mp_sort_item(bool lcm_on)
+ 			if (tItems[j].run != 1 || tItems[j].lcm != lcm_on)
+ 				continue;
+ 
+-			if (ri.count > MP_TEST_ITEM) {
++			if (ri.count >= MP_TEST_ITEM) {
+ 				ILI_ERR("Test item(%d) is invaild, abort\n", ri.count);
+ 				return -EINVAL;
+ 			}
+diff --git a/drivers/input/touchscreen/ili9882n/ilitek_v3_spi.c b/drivers/input/touchscreen/ili9882n/ilitek_v3_spi.c
+index 1bcb94d93..d613bff81 100755
+--- a/drivers/input/touchscreen/ili9882n/ilitek_v3_spi.c
++++ b/drivers/input/touchscreen/ili9882n/ilitek_v3_spi.c
+@@ -246,15 +246,16 @@ static int ili_spi_pll_clk_wakeup(void)
+ 	int index = 0;
+ 	u8 wdata[32] = {0};
+ 	u8 wakeup[9] = {0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3};
+-	u32 wlen = sizeof(wakeup);
++	u32 payload_len = sizeof(wakeup);
++	u32 wlen;
+ 
+ 	wdata[0] = SPI_WRITE;
+-	wdata[1] = wlen >> 8;
+-	wdata[2] = wlen & 0xff;
++	wdata[1] = payload_len >> 8;
++	wdata[2] = payload_len & 0xff;
+ 	index = 3;
+-	wlen += index;
++	wlen = payload_len + index;
+ 
+-	ipio_memcpy(&wdata[index], wakeup, wlen, wlen);
++	ipio_memcpy(&wdata[index], wakeup, payload_len, (int)(sizeof(wdata) - index));
+ 
+ 	ILI_INFO("Write dummy to wake up spi pll clk\n");
+ 	if (ilits->spi_write_then_read(ilits->spi, wdata, wlen, NULL, 0) < 0) {
+@@ -356,6 +357,7 @@ static int ili_spi_wrapper(u8 *txbuf, u32 wlen, u8 *rxbuf, u32 rlen, bool spi_ir
+ 		/* Won't break if it needs to read data following with writing. */
+ 		if (!rlen)
+ 			break;
++		/* fall through */
+ 	case SPI_READ:
+ 		if (!ice && spi_irq) {
+ 			/* Check INT triggered by FW when sending cmds. */
+diff --git a/drivers/power/supply/charger-manager.c b/drivers/power/supply/charger-manager.c
+index f19b804bd..79d0249d2 100755
+--- a/drivers/power/supply/charger-manager.c
++++ b/drivers/power/supply/charger-manager.c
+@@ -165,7 +165,7 @@ static void set_batt_charge_status(int user, int status, int enable)
+ 	enable_charger_arr[user] = !enable;
+ }
+ 
+-static int get_en_charge_state()
++static int get_en_charge_state(void)
+ {
+ 	int i;
+ 	int val = 0;
+@@ -180,7 +180,7 @@ static int get_en_charge_state()
+ /**
+  * stop charge alaways display icon
+  */
+-static void cm_enable_charge()
++static void cm_enable_charge(void)
+ {
+ 	int val = 0;
+ 
+@@ -4217,7 +4217,8 @@ static void cm_track_capacity_monitor(struct charger_manager *cm)
+ 		cm->track.start_clbcnt = clbcnt;
+ 		cm->track.state = CAP_TRACK_UPDATING;
+ 
+-		dev_info(cm->dev, "start_time= %d, clbcnt= %d\n", cm->track.start_time, clbcnt);
++		dev_info(cm->dev, "start_time= %lld, clbcnt= %d\n",
++			 (long long)cm->track.start_time, clbcnt);
+ 		break;
+ 
+ 	case CAP_TRACK_UPDATING:
+diff --git a/include/linux/power/charger-manager.h b/include/linux/power/charger-manager.h
+index b36d7ed19..e64df0423 100755
+--- a/include/linux/power/charger-manager.h
++++ b/include/linux/power/charger-manager.h
+@@ -496,7 +496,7 @@ enum {
+ 
+ #define BAT_TEMP_ABNORMAL                   (-350)
+ #define BAT_COUNT                           2
+-static int g_bat_id_vol[BAT_COUNT *2] = {
++static int __maybe_unused g_bat_id_vol[BAT_COUNT *2] = {
+ 	0,200,		/*10K, lwn*/
+ 	300,600,	/*68K, atl*/
+ };
