@@ -73,24 +73,46 @@ def apply_optional_patch(kernel_repo: Path, patch_file: Path) -> None:
     if not patch_file.exists():
         return
 
-    # Prefer git-apply because the cloned kernel repo is a git checkout.
-    # Use an absolute patch path so the CWD doesn't matter.
     patch_file = patch_file.resolve()
-    try:
-        subprocess.run(
-            ["git", "apply", "--whitespace=nowarn", str(patch_file)],
-            cwd=str(kernel_repo),
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise SystemExit(
-            "Failed to apply build-fixes patch.\n"
-            f"patch: {patch_file}\n"
-            f"stdout:\n{e.stdout}\n"
-            f"stderr:\n{e.stderr}\n"
-        )
+
+    # If the patch was already applied, skip quietly.
+    already_applied = subprocess.run(
+        ["git", "apply", "--reverse", "--check", str(patch_file)],
+        cwd=str(kernel_repo),
+        text=True,
+        capture_output=True,
+    )
+    if already_applied.returncode == 0:
+        print(f"Patch already applied, skipping: {patch_file}")
+        return
+
+    git_apply = subprocess.run(
+        ["git", "apply", "--whitespace=nowarn", str(patch_file)],
+        cwd=str(kernel_repo),
+        text=True,
+        capture_output=True,
+    )
+    if git_apply.returncode == 0:
+        return
+
+    # Fallback: allow fuzz and --forward to tolerate upstream drift.
+    patch_fallback = subprocess.run(
+        ["patch", "-p1", "--forward", "--fuzz=3"],
+        cwd=str(kernel_repo),
+        input=patch_file.read_bytes(),
+        capture_output=True,
+    )
+    if patch_fallback.returncode == 0:
+        return
+
+    raise SystemExit(
+        "Failed to apply build-fixes patch.\n"
+        f"patch: {patch_file}\n"
+        f"git apply stdout:\n{git_apply.stdout}\n"
+        f"git apply stderr:\n{git_apply.stderr}\n"
+        f"patch(1) stdout:\n{patch_fallback.stdout.decode(errors='ignore')}\n"
+        f"patch(1) stderr:\n{patch_fallback.stderr.decode(errors='ignore')}\n"
+    )
 
 
 def patch_kernel_tree(kernel_repo: Path) -> None:
